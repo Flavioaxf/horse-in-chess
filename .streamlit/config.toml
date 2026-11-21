@@ -1,0 +1,26 @@
+# Identidade visual: súmula de torneio em tinta azul-marinho, com acento em latão.
+[theme]
+base = "light"
+primaryColor = "#1C2559"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#ECEFF4"
+textColor = "#1C2559"
+borderColor = "#D5DAE5"
+linkColor = "#1C2559"
+baseRadius = "6px"
+font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap, sans-serif"
+headingFont = "Spectral:https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&display=swap, serif"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+
+[theme.sidebar]
+backgroundColor = "#1C2559"
+secondaryBackgroundColor = "#2A3470"
+textColor = "#E9ECF5"
+borderColor = "#3B4683"
+primaryColor = "#C08A1E"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true
