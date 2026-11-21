@@ -1,1 +1,30 @@
 AGENTS.md
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Cache e artefatos Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Arquivos de IDE e SO
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
