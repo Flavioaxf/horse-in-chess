@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import random
 
 from core.metrics import RegistradorMetricas
@@ -8,8 +9,17 @@ from core.tipos import (
     AvaliacaoCandidato,
     MotivoParada,
     Posicao,
+    VARIANTES_VALIDAS,
     VariantePARE,
 )
+
+
+def _validar_variante(variante: VariantePARE) -> None:
+    if variante not in VARIANTES_VALIDAS:
+        raise ValueError(
+            f"Variante PARE inválida: {variante!r}. "
+            f"Valores aceitos: {sorted(VARIANTES_VALIDAS)}."
+        )
 
 
 def chave_ordenacao(
@@ -18,10 +28,32 @@ def chave_ordenacao(
 ) -> tuple[int, int, int, int]:
     """Retorna a chave lexicográfica minimizada pela variante configurada.
 
-    - ``"restritiva"``: ``(F, I, P, +A)``
-    - ``"expansiva"``: ``(F, I, P, -A)``
+    Não usa pesos arbitrários; compara estritamente na ordem ``(F, I, P, ±A)``:
+    - ``"restritiva"``: ``(F, I, P, +A)`` (prefere menos saídas imediatas).
+    - ``"expansiva"``: ``(F, I, P, -A)`` (prefere mais saídas imediatas).
+
+    Args:
+        avaliacao: Indicadores estruturais ``(F, I, P, A)`` do candidato.
+        variante: Variante da estratégia PARE (``"restritiva"`` ou ``"expansiva"``).
+
+    Returns:
+        Tupla de 4 inteiros usada como chave de ordenação crescente.
+
+    Raises:
+        ValueError: Se ``variante`` não for ``"restritiva"`` nem ``"expansiva"``.
     """
-    raise NotImplementedError("Implementar chave_ordenacao na feature F5 (indicadores-pare).")
+    _validar_variante(variante)
+    termo_acessibilidade = (
+        avaliacao.acessibilidade
+        if variante == "restritiva"
+        else -avaliacao.acessibilidade
+    )
+    return (
+        avaliacao.fragmentacao,
+        avaliacao.isolamento,
+        avaliacao.pressao,
+        termo_acessibilidade,
+    )
 
 
 def avaliar_candidato(
@@ -30,7 +62,94 @@ def avaliar_candidato(
     adjacencias: Adjacencias,
     metricas: RegistradorMetricas,
 ) -> AvaliacaoCandidato:
-    raise NotImplementedError("Implementar avaliar_candidato na feature F5 (indicadores-pare).")
+    """Simula a entrada em ``candidato`` e calcula ``(F, I, P, A)`` no grafo residual ``G_v``.
+
+    O grafo residual ``G_v`` é induzido por ``{v} ∪ U``, onde ``v = candidato`` e
+    ``U`` é o conjunto das casas não visitadas após entrar em ``v`` (``v ∉ U``).
+    Os indicadores são obtidos em uma única passagem BFS sobre ``G_v``:
+    - ``F`` (fragmentação): número de componentes conexas de ``G_v``.
+    - ``I`` (isolamento): vértices de ``U`` (excluindo ``v``) com grau residual 0.
+    - ``P`` (pressão): vértices de ``U`` (excluindo ``v``) com grau residual 1.
+    - ``A`` (acessibilidade): grau de ``v`` em ``G_v`` (vizinhos de ``v`` em ``U``).
+    - ``completo_ainda_possivel``: sinalizador da Proposição 5.3
+      (``F == 1 and I == 0 and P <= 1``).
+
+    O conjunto ``visitadas`` recebido não é modificado.
+
+    Args:
+        candidato: Casa candidata ``v = (linha, coluna)`` em índices 0-based.
+        visitadas: Conjunto de casas já visitadas antes de entrar em ``candidato``.
+        adjacencias: Mapa pré-calculado de listas de adjacência do grafo.
+        metricas: Registrador centralizado de métricas da execução.
+
+    Returns:
+        ``AvaliacaoCandidato`` com os indicadores reais calculados sobre ``G_v``.
+
+    Raises:
+        ValueError: Se ``candidato`` não pertencer a ``adjacencias`` ou já estiver
+            em ``visitadas``.
+    """
+    if candidato not in adjacencias:
+        raise ValueError(
+            f"Candidato inválido: {candidato!r} não pertence ao grafo de adjacências."
+        )
+    if candidato in visitadas:
+        raise ValueError(
+            f"Candidato inválido: {candidato!r} já consta no conjunto de casas visitadas."
+        )
+
+    metricas.registrar_avaliacao_candidato()
+
+    vertices_residuais: set[Posicao] = {
+        casa for casa in adjacencias if casa not in visitadas
+    }
+    explorados: set[Posicao] = set()
+    fila: deque[Posicao] = deque()
+
+    fragmentacao = 0
+    isolamento = 0
+    pressao = 0
+    acessibilidade = 0
+
+    for origem in vertices_residuais:
+        if origem in explorados:
+            continue
+
+        fragmentacao += 1
+        explorados.add(origem)
+        fila.append(origem)
+
+        while fila:
+            vertice = fila.popleft()
+            vizinhos = adjacencias[vertice]
+            metricas.registrar_verificacao_movimento(len(vizinhos))
+
+            grau_residual = 0
+            for vizinho in vizinhos:
+                if vizinho in vertices_residuais and vizinho != vertice:
+                    grau_residual += 1
+                    if vizinho not in explorados:
+                        explorados.add(vizinho)
+                        fila.append(vizinho)
+
+            if vertice == candidato:
+                acessibilidade = grau_residual
+            elif grau_residual == 0:
+                isolamento += 1
+            elif grau_residual == 1:
+                pressao += 1
+
+    completo_ainda_possivel = (
+        fragmentacao == 1 and isolamento == 0 and pressao <= 1
+    )
+    return AvaliacaoCandidato(
+        candidato=candidato,
+        fragmentacao=fragmentacao,
+        isolamento=isolamento,
+        pressao=pressao,
+        acessibilidade=acessibilidade,
+        completo_ainda_possivel=completo_ainda_possivel,
+    )
 
 
 def ordenar_candidatos(
@@ -41,7 +160,52 @@ def ordenar_candidatos(
     rng: random.Random,
     metricas: RegistradorMetricas,
 ) -> list[AvaliacaoCandidato]:
-    raise NotImplementedError("Implementar ordenar_candidatos na feature F5 (indicadores-pare).")
+    """Enumera, avalia e ordena todos os movimentos válidos a partir de ``atual``.
+
+    A ordenação define apenas prioridade — nenhum candidato válido é descartado
+    por pontuação ou pelo sinalizador ``completo_ainda_possivel``. Empates exatos
+    na chave lexicográfica são quebrados de forma determinística pelo gerador
+    local ``rng``.
+
+    Args:
+        atual: Posição corrente do cavalo (já pertencente a ``visitadas``).
+        visitadas: Conjunto de casas já visitadas no percurso atual.
+        adjacencias: Mapa pré-calculado de listas de adjacência do grafo.
+        variante: Variante PARE (``"restritiva"`` ou ``"expansiva"``).
+        rng: Gerador pseudoaleatório local (``random.Random(seed)``).
+        metricas: Registrador centralizado de métricas da execução.
+
+    Returns:
+        Lista com todas as avaliações de candidatos válidos ordenadas por prioridade.
+
+    Raises:
+        ValueError: Se ``variante`` for inválida, se ``atual`` não pertencer a
+            ``adjacencias`` ou se ``atual`` não estiver em ``visitadas``.
+    """
+    _validar_variante(variante)
+    if atual not in adjacencias:
+        raise ValueError(
+            f"Posição atual inválida: {atual!r} não pertence ao grafo de adjacências."
+        )
+    if atual not in visitadas:
+        raise ValueError(
+            f"Posição atual inválida: {atual!r} deve estar presente em visitadas."
+        )
+
+    vizinhos_atual = adjacencias[atual]
+    metricas.registrar_verificacao_movimento(len(vizinhos_atual))
+    candidatos = [vizinho for vizinho in vizinhos_atual if vizinho not in visitadas]
+
+    avaliacoes = [
+        avaliar_candidato(candidato, visitadas, adjacencias, metricas)
+        for candidato in candidatos
+    ]
+
+    if len(avaliacoes) > 1:
+        rng.shuffle(avaliacoes)
+        avaliacoes.sort(key=lambda avaliacao: chave_ordenacao(avaliacao, variante))
+
+    return avaliacoes
 
 
 def executar_guloso(
