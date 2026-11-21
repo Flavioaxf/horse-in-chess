@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import random
+import subprocess
 
 import pytest
 
+import cli
+import core.api as api_module
+from core.api import obter_versao_codigo, resolver
 from core.board import KNIGHT_MOVES, gerar_adjacencias
 from core.metrics import RegistradorMetricas
 from core.pare import (
@@ -12,7 +16,14 @@ from core.pare import (
     executar_guloso,
     ordenar_candidatos,
 )
-from core.tipos import Adjacencias, AvaliacaoCandidato, Posicao
+from core.tipos import (
+    Adjacencias,
+    AvaliacaoCandidato,
+    ConfiguracaoExecucao,
+    Posicao,
+    ResultadoExecucao,
+)
+from core.validator import validar_percurso
 
 
 def _criar_grafo(arestas: list[tuple[Posicao, Posicao]], vertices: list[Posicao]) -> Adjacencias:
@@ -532,15 +543,363 @@ def test_ordenar_candidatos_desempata_com_rng_local_sem_alterar_random_global() 
     assert estado_global_antes == estado_global_depois
     assert ordens_observadas == {((1, 2), (2, 1)), ((2, 1), (1, 2))}
 
+def test_executar_guloso_1x1_completo_imediato() -> None:
+    adjacencias = gerar_adjacencias(1)
+    metricas = RegistradorMetricas()
 
-def test_executar_guloso_permanece_pendente_para_f6() -> None:
-    adjacencias = gerar_adjacencias(5)
-    with pytest.raises(NotImplementedError):
-        executar_guloso(
-            n=5,
-            inicio=(0, 0),
-            variante="restritiva",
-            adjacencias=adjacencias,
-            rng=random.Random(2026),
-            metricas=RegistradorMetricas(),
-        )
+    caminho, motivo = executar_guloso(
+        n=1,
+        inicio=(0, 0),
+        variante="restritiva",
+        adjacencias=adjacencias,
+        rng=random.Random(2026),
+        metricas=metricas,
+    )
+
+    assert caminho == [(0, 0)]
+    assert motivo == "completo"
+    assert metricas.estados_explorados == 1
+    assert metricas.avaliacoes_candidatos == 0
+    assert metricas.verificacoes_movimentos == 0
+    assert metricas.recuos == 0
+    assert metricas.estados_sem_completo_possivel == 0
+
+
+def test_executar_guloso_3x3_percorre_borda_sem_podar_e_para_sem_movimentos() -> None:
+    adjacencias = gerar_adjacencias(3)
+    metricas = RegistradorMetricas()
+
+    caminho, motivo = executar_guloso(
+        n=3,
+        inicio=(0, 0),
+        variante="restritiva",
+        adjacencias=adjacencias,
+        rng=random.Random(2026),
+        metricas=metricas,
+    )
+
+    validacao = validar_percurso(3, (0, 0), caminho)
+    assert validacao.valido is True
+    assert validacao.passeio_completo is False
+    assert len(caminho) == 8
+    assert (1, 1) not in caminho
+    assert motivo == "sem_movimentos"
+    assert metricas.estados_explorados == 8
+    assert metricas.recuos == 0
+    assert metricas.estados_sem_completo_possivel == 7
+
+
+@pytest.mark.parametrize(
+    ("n", "inicio", "variante"),
+    [
+        (5, (0, 0), "restritiva"),
+        (5, (0, 0), "expansiva"),
+        (5, (0, 1), "restritiva"),
+        (8, (0, 0), "restritiva"),
+        (8, (3, 3), "expansiva"),
+    ],
+)
+def test_executar_guloso_gera_percurso_valido_sem_recuos(
+    n: int,
+    inicio: Posicao,
+    variante: str,
+) -> None:
+    adjacencias = gerar_adjacencias(n)
+    metricas = RegistradorMetricas()
+
+    caminho, motivo = executar_guloso(
+        n=n,
+        inicio=inicio,
+        variante=variante,  # type: ignore[arg-type]
+        adjacencias=adjacencias,
+        rng=random.Random(2026),
+        metricas=metricas,
+    )
+
+    validacao = validar_percurso(n, inicio, caminho)
+    assert validacao.valido is True
+    assert caminho[0] == inicio
+    assert metricas.recuos == 0
+    assert metricas.estados_explorados == len(caminho)
+    assert 1 <= len(caminho) <= n * n
+    if len(caminho) == n * n:
+        assert motivo == "completo"
+        assert validacao.passeio_completo is True
+    else:
+        assert motivo == "sem_movimentos"
+        assert validacao.passeio_completo is False
+
+
+def test_executar_guloso_rejeita_entradas_invalidas() -> None:
+    adjacencias_5 = gerar_adjacencias(5)
+    metricas = RegistradorMetricas()
+
+    with pytest.raises(ValueError):
+        executar_guloso(0, (0, 0), "restritiva", adjacencias_5, random.Random(1), metricas)
+
+    with pytest.raises(ValueError):
+        executar_guloso(True, (0, 0), "restritiva", adjacencias_5, random.Random(1), metricas)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        executar_guloso(5, (0, 0), "invalida", adjacencias_5, random.Random(1), metricas)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError):
+        executar_guloso(8, (0, 0), "restritiva", adjacencias_5, random.Random(1), metricas)
+
+    with pytest.raises(ValueError):
+        executar_guloso(5, (9, 9), "restritiva", adjacencias_5, random.Random(1), metricas)
+
+    assert metricas.estados_explorados == 0
+
+
+def test_obter_versao_codigo_retorna_string_e_trata_falha_git(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versao_real = obter_versao_codigo()
+    assert isinstance(versao_real, str)
+    assert len(versao_real) > 0
+
+    def falha_os(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git indisponível")
+
+    monkeypatch.setattr(api_module.subprocess, "run", falha_os)
+    assert obter_versao_codigo() == "desconhecida"
+
+    def retorno_erro(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=["git"], returncode=128, stdout="", stderr="err")
+
+    monkeypatch.setattr(api_module.subprocess, "run", retorno_erro)
+    assert obter_versao_codigo() == "desconhecida"
+
+
+@pytest.mark.parametrize(
+    ("n", "inicio", "paridade_esperada"),
+    [
+        (5, (0, 0), False),
+        (5, (0, 1), True),
+        (8, (0, 0), False),
+        (8, (3, 3), False),
+    ],
+)
+@pytest.mark.parametrize("variante", ["restritiva", "expansiva"])
+def test_resolver_guloso_cenarios_obrigatorios_e_invariantes(
+    n: int,
+    inicio: Posicao,
+    paridade_esperada: bool,
+    variante: str,
+) -> None:
+    config = ConfiguracaoExecucao(
+        n=n,
+        inicio=inicio,
+        modo="guloso",
+        variante=variante,  # type: ignore[arg-type]
+        seed=2026,
+    )
+
+    resultado = resolver(config)
+
+    assert isinstance(resultado, ResultadoExecucao)
+    assert resultado.config == config
+    assert resultado.seed_utilizada == 2026
+    assert resultado.total_casas == n * n
+    assert resultado.casas_visitadas == len(resultado.melhor_percurso)
+    assert resultado.cobertura_percentual == pytest.approx(
+        100.0 * resultado.casas_visitadas / resultado.total_casas
+    )
+    assert resultado.impossibilidade_paridade is paridade_esperada
+    assert resultado.recuos == 0
+    assert resultado.estados_explorados == resultado.casas_visitadas
+    assert resultado.verificacoes_preparo == 8 * n * n
+    assert resultado.verificacoes_movimentos > 0
+    assert resultado.avaliacoes_candidatos > 0
+    assert resultado.tempo_segundos >= 0.0
+    assert isinstance(resultado.versao_codigo, str) and len(resultado.versao_codigo) > 0
+
+    validacao = validar_percurso(n, inicio, resultado.melhor_percurso)
+    assert validacao.valido is True
+    assert resultado.melhor_percurso[0] == inicio
+    assert resultado.passeio_completo is validacao.passeio_completo
+    assert resultado.motivo_parada == (
+        "completo" if resultado.passeio_completo else "sem_movimentos"
+    )
+
+    if paridade_esperada:
+        assert resultado.passeio_completo is False
+        assert resultado.casas_visitadas <= 24
+        assert resultado.casas_visitadas > 1
+
+
+@pytest.mark.parametrize("variante", ["restritiva", "expansiva"])
+def test_resolver_guloso_determinismo_com_mesma_semente(variante: str) -> None:
+    config = ConfiguracaoExecucao(
+        n=8,
+        inicio=(3, 3),
+        modo="guloso",
+        variante=variante,  # type: ignore[arg-type]
+        seed=2026,
+    )
+
+    r1 = resolver(config)
+    r2 = resolver(config)
+
+    assert r1.seed_utilizada == r2.seed_utilizada == 2026
+    assert r1.melhor_percurso == r2.melhor_percurso
+    assert r1.casas_visitadas == r2.casas_visitadas
+    assert r1.cobertura_percentual == r2.cobertura_percentual
+    assert r1.passeio_completo == r2.passeio_completo
+    assert r1.motivo_parada == r2.motivo_parada
+    assert r1.estados_explorados == r2.estados_explorados
+    assert r1.verificacoes_movimentos == r2.verificacoes_movimentos
+    assert r1.verificacoes_preparo == r2.verificacoes_preparo
+    assert r1.avaliacoes_candidatos == r2.avaliacoes_candidatos
+    assert r1.recuos == r2.recuos == 0
+    assert r1.estados_sem_completo_possivel == r2.estados_sem_completo_possivel
+
+
+def test_resolver_gera_e_registra_seed_quando_none_sem_afetar_random_global() -> None:
+    estado_global_antes = random.getstate()
+    cfg_sem_seed = ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", seed=None)
+
+    res_auto = resolver(cfg_sem_seed)
+
+    assert random.getstate() == estado_global_antes
+    assert isinstance(res_auto.seed_utilizada, int)
+    assert not isinstance(res_auto.seed_utilizada, bool)
+
+    cfg_reproduzida = ConfiguracaoExecucao(
+        n=5, inicio=(0, 0), modo="guloso", seed=res_auto.seed_utilizada
+    )
+    res_reproduzido = resolver(cfg_reproduzida)
+    assert res_reproduzido.melhor_percurso == res_auto.melhor_percurso
+    assert res_reproduzido.estados_explorados == res_auto.estados_explorados
+    assert res_reproduzido.verificacoes_movimentos == res_auto.verificacoes_movimentos
+
+
+@pytest.mark.parametrize(
+    "config_invalida",
+    [
+        ConfiguracaoExecucao(n=6, inicio=(0, 0), modo="guloso"),
+        ConfiguracaoExecucao(n=5, inicio=(5, 0), modo="guloso"),
+        ConfiguracaoExecucao(n=5, inicio=(-1, 0), modo="guloso"),
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="invalido"),  # type: ignore[arg-type]
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", variante="outra"),  # type: ignore[arg-type]
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", seed=True),  # type: ignore[arg-type]
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", seed="2026"),  # type: ignore[arg-type]
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", max_estados=0),
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", max_estados=-5),
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", podar_inviaveis=1),  # type: ignore[arg-type]
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="recuo", max_estados=None),
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="recuo", max_estados=0),
+        ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="recuo", max_estados=True),  # type: ignore[arg-type]
+    ],
+)
+def test_resolver_rejeita_configuracoes_invalidas(
+    config_invalida: ConfiguracaoExecucao,
+) -> None:
+    with pytest.raises(ValueError):
+        resolver(config_invalida)
+
+
+def test_resolver_rejeita_objeto_que_nao_e_configuracao() -> None:
+    with pytest.raises(ValueError):
+        resolver({"n": 5, "inicio": (0, 0), "modo": "guloso"})  # type: ignore[arg-type]
+
+
+def test_resolver_despacha_modo_recuo_com_todos_os_parametros(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chamada: dict[str, object] = {}
+
+    def recuo_duble(
+        n: int,
+        inicio: Posicao,
+        variante: str,
+        max_estados: int,
+        adjacencias: Adjacencias,
+        rng: random.Random,
+        metricas: RegistradorMetricas,
+        podar_inviaveis: bool = False,
+    ) -> tuple[list[Posicao], str]:
+        chamada["n"] = n
+        chamada["inicio"] = inicio
+        chamada["variante"] = variante
+        chamada["max_estados"] = max_estados
+        chamada["total_adj"] = len(adjacencias)
+        chamada["podar_inviaveis"] = podar_inviaveis
+        metricas.registrar_estado()
+        metricas.registrar_estado()
+        metricas.registrar_recuo()
+        return [inicio, (1, 2)], "limite_estados"
+
+    monkeypatch.setattr(api_module, "executar_recuo", recuo_duble)
+
+    config = ConfiguracaoExecucao(
+        n=5,
+        inicio=(0, 0),
+        modo="recuo",
+        variante="expansiva",
+        seed=42,
+        max_estados=250,
+        podar_inviaveis=True,
+    )
+    resultado = resolver(config)
+
+    assert chamada == {
+        "n": 5,
+        "inicio": (0, 0),
+        "variante": "expansiva",
+        "max_estados": 250,
+        "total_adj": 25,
+        "podar_inviaveis": True,
+    }
+    assert resultado.melhor_percurso == [(0, 0), (1, 2)]
+    assert resultado.casas_visitadas == 2
+    assert resultado.passeio_completo is False
+    assert resultado.motivo_parada == "limite_estados"
+    assert resultado.estados_explorados == 2
+    assert resultado.recuos == 1
+
+
+def test_resolver_recusa_percurso_invalido_ou_completo_inconsistente(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def guloso_invalido(*args: object, **kwargs: object) -> tuple[list[Posicao], str]:
+        # Casa repetida: deve ser rejeitada pelo validador independente.
+        return [(0, 0), (1, 2), (0, 0)], "sem_movimentos"
+
+    monkeypatch.setattr(api_module, "executar_guloso", guloso_invalido)
+    with pytest.raises(RuntimeError, match="Percurso inválido"):
+        resolver(ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", seed=1))
+
+    def guloso_completo_falso(*args: object, **kwargs: object) -> tuple[list[Posicao], str]:
+        # Percurso válido mas parcial alegando motivo_parada="completo".
+        return [(0, 0), (1, 2)], "completo"
+
+    monkeypatch.setattr(api_module, "executar_guloso", guloso_completo_falso)
+    with pytest.raises(RuntimeError, match="Inconsistência interna"):
+        resolver(ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="guloso", seed=1))
+
+
+def test_integracao_cli_com_resolver_guloso_real(capsys: pytest.CaptureFixture[str]) -> None:
+    codigo = cli.main(
+        [
+            "--n",
+            "5",
+            "--linha",
+            "1",
+            "--coluna",
+            "1",
+            "--modo",
+            "guloso",
+            "--variante",
+            "restritiva",
+            "--seed",
+            "2026",
+        ]
+    )
+    saida = capsys.readouterr().out
+
+    assert codigo == 0
+    assert "tabuleiro 5×5" in saida
+    assert "início (linha 1, coluna 1)" in saida
+    assert "semente utilizada ....... 2026" in saida

@@ -208,6 +208,10 @@ def ordenar_candidatos(
     return avaliacoes
 
 
+def _eh_inteiro_estrito(valor: object) -> bool:
+    return isinstance(valor, int) and not isinstance(valor, bool)
+
+
 def executar_guloso(
     n: int,
     inicio: Posicao,
@@ -217,6 +221,11 @@ def executar_guloso(
     metricas: RegistradorMetricas,
 ) -> tuple[list[Posicao], MotivoParada]:
     """Executa a estratégia PARE no modo guloso (sem recuo; ``recuos == 0``).
+
+    A partir de ``inicio``, avança iterativamente para o candidato de maior
+    prioridade segundo ``ordenar_candidatos`` até visitar todas as ``n * n``
+    casas ou não haver mais movimentos válidos. Nunca desfaz escolhas nem
+    descarta candidatos pelo sinalizador da Proposição 5.3.
 
     Args:
         n: Dimensão do tabuleiro ``n × n``.
@@ -229,5 +238,51 @@ def executar_guloso(
     Returns:
         Tupla ``(caminho, motivo_parada)``, com ``motivo_parada`` em
         ``{"completo", "sem_movimentos"}``.
+
+    Raises:
+        ValueError: Se ``n`` não for inteiro positivo, se ``variante`` for
+            inválida, se ``adjacencias`` não corresponder a um tabuleiro ``n × n``
+            ou se ``inicio`` não pertencer a ``adjacencias``.
     """
-    raise NotImplementedError("Implementar executar_guloso na feature F6 (modo-guloso).")
+    if not _eh_inteiro_estrito(n) or n <= 0:
+        raise ValueError(
+            f"Dimensão inválida no modo guloso: esperado inteiro positivo, recebido {n!r}."
+        )
+    _validar_variante(variante)
+
+    total_casas = n * n
+    if len(adjacencias) != total_casas:
+        raise ValueError(
+            f"Mapa de adjacências incompatível com tabuleiro {n}×{n}: "
+            f"esperado {total_casas} casas, recebido {len(adjacencias)}."
+        )
+    if inicio not in adjacencias:
+        raise ValueError(
+            f"Posição inicial inválida: {inicio!r} não pertence ao mapa de adjacências."
+        )
+
+    caminho: list[Posicao] = [inicio]
+    visitadas: set[Posicao] = {inicio}
+    metricas.registrar_estado()
+
+    while len(caminho) < total_casas:
+        atual = caminho[-1]
+        candidatos_ordenados = ordenar_candidatos(
+            atual=atual,
+            visitadas=visitadas,
+            adjacencias=adjacencias,
+            variante=variante,
+            rng=rng,
+            metricas=metricas,
+        )
+        if not candidatos_ordenados:
+            return caminho, "sem_movimentos"
+
+        escolhido = candidatos_ordenados[0]
+        caminho.append(escolhido.candidato)
+        visitadas.add(escolhido.candidato)
+        metricas.registrar_estado()
+        if not escolhido.completo_ainda_possivel:
+            metricas.registrar_estado_sem_completo_possivel()
+
+    return caminho, "completo"
