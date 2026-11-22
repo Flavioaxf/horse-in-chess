@@ -96,6 +96,29 @@ pytest -q
 
 Os contadores são incrementados durante a execução por `core/metrics.py`, nunca calculados por fórmula ao final.
 
+## Decisões de implementação
+
+- **Ponto único de entrada:** interface, CLI e experimentos chamam só `core.api.resolver(config)`, que valida a configuração, mede o esforço, passa o percurso pelo validador e devolve um `ResultadoExecucao`.
+- **Recuo sem recursão:** o modo com recuo usa pilha explícita; cada nível guarda só os candidatos pendentes, não cópias do tabuleiro, o que mantém o espaço em `O(V)`.
+- **Desempate reproduzível:** empates na chave `(F, I, P, A)` são resolvidos com um `random.Random(seed)` local. Sem semente fixa, uma é gerada e registrada no resultado.
+- **Validador independente:** `core/validator.py` não importa a estratégia nem a busca; confere limites, início, repetição e saltos de cada percurso.
+- **Paridade só informativa:** o detector de paridade avisa quando o passeio completo é impossível, mas não altera a busca nem a casa inicial.
+- **Proposição 5.3 como sinalizador:** a condição `F = 1, I = 0, P ≤ 1` é registrada (`estados_sem_completo_possivel`), mas não descarta candidatos. A opção `podar_inviaveis` existe no núcleo e fica desligada por padrão; a CLI e a interface não a expõem.
+- **Animação sem reexecutar:** a interface roda o algoritmo uma vez e depois só reproduz o melhor percurso encontrado; as tentativas descartadas pela busca não aparecem.
+
+## Limitações
+
+- O modo com recuo é limitado por `max_estados`. Quando o orçamento acaba, o resultado é o **maior percurso encontrado dentro do orçamento**, não necessariamente o maior possível, e o motivo de parada é `limite_estados`.
+- No 5×5 com início em (1, 2) o passeio completo é impossível por paridade (máximo teórico de 24 casas).
+- Os tempos dependem da máquina; o CSV registra versão do Python, sistema operacional e processador de cada execução.
+- Não foram feitos os itens extras do planejamento: análise com 10 sementes, comparação de vários orçamentos e integração contínua (CI).
+- A interface foi testada localmente no Windows 11 com Python 3.12; não foi testada em Linux ou macOS.
+
+## Versões
+
+- Python 3.11 ou superior (desenvolvido e testado com 3.12).
+- Dependências e faixas de versão em `requirements.txt` (`streamlit>=1.50,<2.0`, `pandas>=2.2,<3.0`, `matplotlib>=3.8,<4.0`, `pytest>=8.0,<9.0`).
+
 ## Estrutura do projeto
 
 ```text

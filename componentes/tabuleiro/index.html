@@ -156,6 +156,18 @@ function montar() {
     }
   }
   el("rect", { x: M, y: M, width: n * c, height: n * c, fill: "none", stroke: CORES.tinta, "stroke-width": 1.5 });
+  // Resultados: traço nas casas que o melhor percurso não visitou.
+  if (A.modo === "analise") {
+    const visitadas = new Set(P.map((p) => p[0] + "," + p[1]));
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (visitadas.has(i + "," + j)) continue;
+        el("text", { class: "nao-visitada", x: M + j * c + c / 2, y: M + i * c + c / 2 + c * 0.1,
+                     "text-anchor": "middle", "font-size": Math.round(c * 0.34), "font-weight": 600,
+                     fill: CORES.tinta, opacity: 0.55 }, "–");
+      }
+    }
+  }
   const rastro = el("g", {});
   const peca = el("g", {});
   el("circle", { r: c * 0.42, fill: "none", stroke: CORES.latao, "stroke-width": 2.5 }, undefined, peca);

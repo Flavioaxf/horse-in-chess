@@ -115,6 +115,12 @@ def test_componente_existe() -> None:
     assert (app.DIR_COMPONENTE / "index.html").is_file()
 
 
+def test_componente_marca_casas_nao_visitadas_com_traco() -> None:
+    # Seção 7.2: números 1..k nas casas visitadas e traço nas demais.
+    html = (app.DIR_COMPONENTE / "index.html").read_text(encoding="utf-8")
+    assert 'class: "nao-visitada"' in html and '"–"' in html
+
+
 def test_miniatura_traça_o_percurso() -> None:
     svg = app.gerar_svg_miniatura(5, PERCURSO_PARCIAL_MANUAL)
     assert svg.count("<rect") == 25 + 1
