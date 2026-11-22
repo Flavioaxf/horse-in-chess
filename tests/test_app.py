@@ -151,6 +151,26 @@ def test_painel_mostra_valores_do_resultado() -> None:
     assert "Passeio completo impossível" not in html
 
 
+@pytest.mark.parametrize("paridade", [False, True])
+@pytest.mark.parametrize(
+    "validacao",
+    [None, ResultadoValidacao(True, False), ResultadoValidacao(False, False, ("erro",))],
+)
+def test_painel_nao_vira_bloco_de_codigo_no_markdown(paridade, validacao) -> None:
+    # Regressão: sem aviso de paridade sobrava uma linha vazia seguida de uma linha
+    # recuada, e o Markdown mostrava o HTML da conferência como código.
+    resultado = _resultado_manual(PERCURSO_PARCIAL_MANUAL, paridade=paridade)
+    html = app.gerar_html_painel(resultado, validacao)
+    linhas = html.splitlines()
+    assert all(linha.strip() for linha in linhas)
+    assert not any(linha.startswith(" ") for linha in linhas)
+
+
+def test_cartoes_nao_viram_bloco_de_codigo() -> None:
+    html = app.gerar_html_cartoes_comparacao([_resultado_manual(PERCURSO_PARCIAL_MANUAL)] * 2)
+    assert not any(linha.startswith(" ") or not linha.strip() for linha in html.splitlines())
+
+
 def test_painel_mostra_limite_e_paridade() -> None:
     resultado = _resultado_manual(
         [(0, 1), (2, 0)], modo="recuo", motivo="limite_estados", paridade=True, max_estados=10_000

@@ -251,6 +251,16 @@ def gerar_svg_miniatura(n: int, percurso: Sequence[Posicao], lado: int = 168) ->
 # --------------------------------------------------------------------------- painéis
 
 
+def compactar_html(html: str) -> str:
+    """Remove recuos e linhas vazias de um bloco HTML antes do ``st.markdown``.
+
+    No Markdown, uma linha recuada com 4 espaços depois de uma linha vazia vira bloco
+    de código, e o HTML aparece cru na tela (aconteceu quando o aviso de paridade
+    ficava vazio).
+    """
+    return "\n".join(linha.strip() for linha in html.splitlines() if linha.strip())
+
+
 def conferir_percurso(resultado: ResultadoExecucao) -> ResultadoValidacao | None:
     """Passa o melhor percurso pelo validador independente; ``None`` se ele não existir ainda."""
     try:
@@ -297,7 +307,7 @@ def gerar_html_eficacia(
         )
 
     orcamento = "não se aplica" if cfg.max_estados is None else formatar_inteiro(cfg.max_estados)
-    return f"""
+    return compactar_html(f"""
 <div class="painel">
   <section class="ficha">
     <h3>Eficácia</h3>
@@ -321,7 +331,7 @@ def gerar_html_eficacia(
     <dt>Código</dt><dd><code>{escape(resultado.versao_codigo)}</code></dd>
   </dl>
 </div>
-"""
+""")
 
 
 def gerar_html_eficiencia(resultado: ResultadoExecucao) -> str:
@@ -398,7 +408,7 @@ def gerar_html_cartoes_comparacao(resultados: Sequence[ResultadoExecucao]) -> st
   {formatar_inteiro(r.estados_explorados)} estados<br>
   {formatar_inteiro(r.verificacoes_movimentos)} verificações</p>
 </figure>""")
-    return f'<div class="cartoes">{"".join(cartoes)}</div>'
+    return compactar_html(f'<div class="cartoes">{"".join(cartoes)}</div>')
 
 
 # --------------------------------------------------------------------------- gráficos
