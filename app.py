@@ -584,16 +584,22 @@ def argumentos_formulario() -> dict:
     }
 
 
+def mensagem_de_erro(config: ConfiguracaoExecucao, erro: Exception) -> str:
+    """Texto mostrado na tela quando ``core.api.resolver`` não devolve resultado."""
+    if isinstance(erro, NotImplementedError):
+        return (f"O modo “{ROTULO_MODO[config.modo]}” ainda não está disponível nesta versão "
+                "do código. Escolha outro modo ou aguarde a integração.")
+    if isinstance(erro, ValueError):
+        return f"O algoritmo recusou a configuração: {erro}"
+    return ("O algoritmo produziu um resultado que não passou na conferência interna, "
+            f"e por isso ele não é exibido. Detalhe: {erro}")
+
+
 def _chamar_resolver(config: ConfiguracaoExecucao) -> ResultadoExecucao | None:
     try:
         return core.api.resolver(config)
-    except NotImplementedError:
-        st.session_state["erro"] = (
-            "O algoritmo ainda não está disponível nesta versão do código. "
-            "Ele entra com a integração do modo guloso e do modo com recuo."
-        )
-    except ValueError as erro:
-        st.session_state["erro"] = f"O algoritmo recusou a configuração: {erro}"
+    except (NotImplementedError, ValueError, RuntimeError) as erro:
+        st.session_state["erro"] = mensagem_de_erro(config, erro)
     return None
 
 
@@ -619,11 +625,16 @@ def _rever_animacao() -> None:
 
 
 def _comparar() -> None:
-    """Roda as 4 combinações na mesma posição, semente e orçamento da última análise."""
+    """Roda as 4 combinações na mesma posição, semente e orçamento da última análise.
+
+    Uma combinação cujo modo ainda não foi implementado fica de fora e é listada
+    em ``comparacao_pendentes``; qualquer outro erro cancela a comparação.
+    """
     st.session_state["erro"] = None
     base: ResultadoExecucao = st.session_state["resultado"]
     cfg = base.config
-    resultados = []
+    resultados: list[ResultadoExecucao] = []
+    pendentes: list[str] = []
     for modo in MODOS:
         for variante in VARIANTES:
             config = ConfiguracaoExecucao(
@@ -635,11 +646,18 @@ def _comparar() -> None:
                 max_estados=(cfg.max_estados or int(st.session_state["cfg_orcamento"]))
                 if modo == "recuo" else None,
             )
-            resultado = _chamar_resolver(config)
-            if resultado is None:
+            try:
+                resultados.append(core.api.resolver(config))
+            except NotImplementedError:
+                pendentes.append(rotulo_combinacao(modo, variante))
+            except (ValueError, RuntimeError) as erro:
+                st.session_state["erro"] = mensagem_de_erro(config, erro)
                 return
-            resultados.append(resultado)
+    if not resultados:
+        st.session_state["erro"] = "Nenhuma das combinações está disponível nesta versão do código."
+        return
     st.session_state["comparacao"] = resultados
+    st.session_state["comparacao_pendentes"] = pendentes
 
 
 # --------------------------------------------------------------------------- partes comuns
@@ -662,7 +680,7 @@ def _menu_lateral() -> None:
             type="primary" if tela == destaque else "secondary",
             on_click=_ir,
             args=(tela,),
-            use_container_width=True,
+            width="stretch",
         )
     st.sidebar.markdown(
         '<div class="menu-rodape">NCC0234 Complexidade de Algoritmos<br>UERN, 2026.2</div>',
@@ -711,8 +729,8 @@ def _tela_inicio() -> None:
         )
         b1, b2 = st.columns(2)
         b1.button("Iniciar análise", type="primary", on_click=_ir, args=("configurar",),
-                  use_container_width=True)
-        b2.button("Sobre o sistema", on_click=_ir, args=("sobre",), use_container_width=True)
+                  width="stretch")
+        b2.button("Sobre o sistema", on_click=_ir, args=("sobre",), width="stretch")
         st.markdown(
             '<p class="capa rodape" style="padding:0">Trabalho Final T3 de NCC0234 Complexidade '
             "de Algoritmos<br>Universidade do Estado do Rio Grande do Norte, 2026.2, "
@@ -796,7 +814,7 @@ def _tela_configurar() -> None:
         st.number_input("Semente", step=1, key="cfg_seed",
                         disabled=not st.session_state["cfg_seed_fixa"])
         st.button("Executar análise", type="primary", on_click=_executar,
-                  use_container_width=True)
+                  width="stretch")
 
     with previa:
         args = argumentos_formulario()
@@ -872,15 +890,20 @@ def _tela_resultados() -> None:
 
 def _secao_comparacao(resultados: list[ResultadoExecucao]) -> None:
     cfg = resultados[0].config
-    _titulo("Comparação das 4 combinações",
+    titulo = ("Comparação das 4 combinações" if len(resultados) == 4
+              else f"Comparação de {len(resultados)} combinações")
+    _titulo(titulo,
             f"Mesma casa inicial {formatar_casa(cfg.inicio)} e mesma semente. Exploração ao vivo: "
             "os números do relatório vêm de <code>results/experiments.csv</code>.")
+    pendentes = st.session_state.get("comparacao_pendentes") or []
+    if pendentes:
+        st.info("Ainda não disponíveis nesta versão do código: " + ", ".join(pendentes) + ".")
     st.markdown(gerar_html_cartoes_comparacao(resultados), unsafe_allow_html=True)
     df = pd.DataFrame([resultado_para_linha(r) for r in resultados])
-    st.pyplot(grafico_comparativo(df), use_container_width=True)
+    st.pyplot(grafico_comparativo(df), width="stretch")
     st.dataframe(
         df.drop(columns=["modo", "variante"]),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "combinacao": "Combinação",
@@ -912,11 +935,11 @@ def _tela_experimentos() -> None:
 
     colunas_graficos = {"cenario", "modo", "variante"} | {c for c, _, _ in METRICAS_GRAFICO}
     if colunas_graficos <= set(df.columns):
-        st.pyplot(grafico_comparativo(df, grupo="cenario"), use_container_width=True)
+        st.pyplot(grafico_comparativo(df, grupo="cenario"), width="stretch")
     else:
         faltando = sorted(colunas_graficos - set(df.columns))
         st.caption(f"Gráficos indisponíveis: faltam as colunas {', '.join(faltando)}.")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
     st.download_button("Baixar CSV", df.to_csv(index=False).encode("utf-8"),
                        file_name="experiments.csv", mime="text/csv")
 

@@ -342,6 +342,51 @@ def test_comparacao_roda_as_quatro_combinacoes(monkeypatch) -> None:
     assert _html(at).count('<figure class="cartao">') == 4
 
 
+def test_mensagens_de_erro_do_resolvedor() -> None:
+    cfg = ConfiguracaoExecucao(n=5, inicio=(0, 0), modo="recuo", max_estados=10)
+    assert "modo “Com recuo limitado” ainda não está disponível" in app.mensagem_de_erro(
+        cfg, NotImplementedError())
+    assert "recusou a configuração: x" in app.mensagem_de_erro(cfg, ValueError("x"))
+    assert "não passou na conferência" in app.mensagem_de_erro(cfg, RuntimeError("y"))
+
+
+def test_erro_interno_do_resolvedor_nao_derruba_a_tela(monkeypatch) -> None:
+    def quebrado(config):
+        raise RuntimeError("Percurso inválido produzido pelo resolvedor")
+
+    monkeypatch.setattr(core.api, "resolver", quebrado)
+    at = AppTest.from_file(ARQUIVO_APP).run()
+    _botao(at, "Iniciar análise").click().run()
+    _botao(at, "Executar análise").click().run()
+    assert not at.exception
+    assert at.session_state["tela"] == "configurar"
+    assert any("conferência interna" in e.value for e in at.error)
+
+
+def test_comparacao_mostra_so_as_combinacoes_disponiveis(monkeypatch) -> None:
+    recebido: list[ConfiguracaoExecucao] = []
+    duble = _duble(recebido)
+
+    def sem_recuo(config):
+        if config.modo == "recuo":
+            raise NotImplementedError
+        return duble(config)
+
+    monkeypatch.setattr(core.api, "resolver", sem_recuo)
+    at = AppTest.from_file(ARQUIVO_APP).run()
+    _botao(at, "Iniciar análise").click().run()
+    _botao(at, "Executar análise").click().run()
+    _botao(at, "Pular para os resultados ⏭").click().run()
+    _botao(at, "Comparar as 4 combinações").click().run()
+
+    assert not at.exception and not at.error
+    html = _html(at)
+    assert html.count('<figure class="cartao">') == 2
+    assert "Comparação de 2 combinações" in html
+    assert any("recuo / restritiva" in i.value and "recuo / expansiva" in i.value
+               for i in at.info)
+
+
 def test_menu_lateral_comeca_recolhido() -> None:
     at = AppTest.from_file(ARQUIVO_APP).run()
     assert not at.exception
