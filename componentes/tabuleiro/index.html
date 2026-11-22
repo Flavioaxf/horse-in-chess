@@ -1,0 +1,360 @@
+<!doctype html>
+<!--
+  Componente do tabuleiro do Passeio do Cavalo (interface Streamlit, dono: P3).
+
+  Recebe do app.py (args do Streamlit):
+    modo        "previa" | "animacao" | "analise"
+    n           dimensão do tabuleiro
+    percurso    melhor percurso devolvido pelo resolver (0-based); vazio na prévia
+    inicio      casa inicial (0-based)
+    cor         "azul" | "preto" | "branco" (cor do cavalo)
+    execucao    identificador da execução (reinicia a animação quando muda)
+
+  Devolve ao app.py: {"evento": "fim", "execucao": ...} quando a animação termina.
+
+  Este componente só desenha o percurso recebido. Ele não decide movimentos e não
+  mostra a ordem de exploração da busca.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:wght@600&display=swap");
+:root { --tinta:#1C2559; --suave:#4A5486; --linha:#D5DAE5; --latao:#C08A1E; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font-family: "IBM Plex Sans", system-ui, sans-serif; color: var(--tinta); }
+.raiz { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 22px; align-items: start; padding: 2px; }
+.raiz.sem-lado { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 540px) { .raiz { grid-template-columns: 1fr; } .sumula { max-height: 200px !important; } }
+.coluna { display: flex; flex-direction: column; gap: 14px; min-width: 0; align-items: center; }
+svg { display: block; width: 100%; height: auto; }
+svg text { font-family: "IBM Plex Sans", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.peca { font-family: "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols 2", serif !important; }
+.controles { display: flex; align-items: center; gap: 6px; width: 100%; }
+button {
+  font: 500 13px/1 "IBM Plex Sans", system-ui, sans-serif; color: var(--tinta);
+  height: 34px; min-width: 34px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--linha); background: #fff;
+}
+button:hover { border-color: var(--tinta); }
+button:focus-visible, input:focus-visible, li:focus-visible { outline: 2px solid var(--latao); outline-offset: 2px; }
+button.tocar { background: var(--tinta); border-color: var(--tinta); color: #fff; min-width: 104px; }
+input[type=range] { flex: 1; min-width: 60px; accent-color: var(--latao); }
+.estado { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.estado p { margin: 0; font-size: 14px; color: var(--suave); display: flex; justify-content: space-between; gap: 12px; }
+.estado strong { color: var(--tinta); font-variant-numeric: tabular-nums; }
+.barra { height: 4px; background: var(--linha); border-radius: 2px; overflow: hidden; }
+.barra i { display: block; height: 100%; width: 0; background: var(--latao); }
+.sumula {
+  border: 1px solid var(--linha); border-radius: 8px; background: #fff;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.sumula header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 12px 14px 10px; border-bottom: 1px solid var(--linha);
+}
+.sumula h2 { margin: 0; font: 600 18px/1 "Spectral", Georgia, serif; }
+.sumula .placar { font-size: 12px; color: var(--suave); font-variant-numeric: tabular-nums; }
+.sumula ol { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
+.sumula li {
+  display: flex; gap: 10px; padding: 4px 14px; font-size: 13px;
+  font-variant-numeric: tabular-nums; border-left: 3px solid transparent;
+}
+.sumula.navegavel li { cursor: pointer; }
+.sumula.navegavel li:hover { background: #eef1f7; }
+.sumula li .num { color: var(--suave); min-width: 18px; text-align: right; }
+.sumula li.futuro { display: none; }
+.sumula.navegavel li.futuro { display: flex; color: #a6adc6; }
+.sumula li.atual { border-left-color: var(--latao); background: #f7efdc; font-weight: 600; }
+.nota { padding: 14px; font-size: 13px; line-height: 1.55; color: var(--suave); }
+.nota strong { color: var(--tinta); font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const CORES = { clara: "#E4E8F0", escura: "#9AA6BF", tinta: "#1C2559", suave: "#4A5486", latao: "#C08A1E" };
+const PECAS = {
+  azul: { preenchimento: "#1C2559", contorno: "#FFFFFF" },
+  preto: { preenchimento: "#000000", contorno: "#FFFFFF" },
+  branco: { preenchimento: "#FFFFFF", contorno: "#1C2559" },
+};
+const SALTOS = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
+const M = 26;
+const reduzirMovimento = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function enviar(tipo, dados) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: tipo }, dados || {}), "*");
+}
+function ajustarAltura() {
+  enviar("streamlit:setFrameHeight", { height: Math.ceil(document.body.scrollHeight) + 2 });
+}
+function devolver(valor) {
+  enviar("streamlit:setComponentValue", { value: valor, dataType: "json" });
+}
+
+let A = null, assinatura = "", animacao = null;
+
+window.addEventListener("message", (e) => {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  const novos = e.data.args;
+  const nova = JSON.stringify(novos);
+  if (nova === assinatura) return;
+  const soMudouCor = A && JSON.stringify(Object.assign({}, A, { cor: novos.cor })) === nova;
+  A = novos;
+  assinatura = nova;
+  if (soMudouCor && pintarPeca) { pintarPeca(); return; }
+  montar();
+});
+window.addEventListener("resize", ajustarAltura);
+enviar("streamlit:componentReady", { apiVersion: 1 });
+
+let pintarPeca = null;
+
+function montar() {
+  if (animacao) cancelAnimationFrame(animacao);
+  animacao = null;
+  const app = document.getElementById("app");
+  const n = A.n, P = A.percurso, total = P.length;
+  const c = n <= 5 ? 72 : 50;
+  const lado = n * c + M;
+  const cx = (p) => M + p[1] * c + c / 2;
+  const cy = (p) => M + p[0] * c + c / 2;
+  const casaTxt = (p) => "(" + (p[0] + 1) + ", " + (p[1] + 1) + ")";
+
+  app.innerHTML = "";
+  const raiz = document.createElement("div");
+  raiz.className = "raiz";
+  app.appendChild(raiz);
+  const coluna = document.createElement("div");
+  coluna.className = "coluna";
+  raiz.appendChild(coluna);
+
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 " + lado + " " + lado);
+  svg.style.maxWidth = lado + "px";
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Tabuleiro " + n + " por " + n);
+  coluna.appendChild(svg);
+
+  function el(tag, attrs, texto, pai) {
+    const e = document.createElementNS(NS, tag);
+    for (const [a, v] of Object.entries(attrs)) e.setAttribute(a, v);
+    if (texto !== undefined) e.textContent = texto;
+    (pai || svg).appendChild(e);
+    return e;
+  }
+
+  // Camada fixa: casas e rótulos.
+  for (let i = 0; i < n; i++) {
+    el("text", { x: M + i * c + c / 2, y: 16, "text-anchor": "middle", "font-size": 12, fill: CORES.suave }, i + 1);
+    el("text", { x: 11, y: M + i * c + c / 2 + 4, "text-anchor": "middle", "font-size": 12, fill: CORES.suave }, i + 1);
+    for (let j = 0; j < n; j++) {
+      el("rect", { x: M + j * c, y: M + i * c, width: c, height: c, fill: (i + j) % 2 ? CORES.escura : CORES.clara });
+    }
+  }
+  el("rect", { x: M, y: M, width: n * c, height: n * c, fill: "none", stroke: CORES.tinta, "stroke-width": 1.5 });
+  // Resultados: traço nas casas que o melhor percurso não visitou.
+  if (A.modo === "analise") {
+    const visitadas = new Set(P.map((p) => p[0] + "," + p[1]));
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (visitadas.has(i + "," + j)) continue;
+        el("text", { class: "nao-visitada", x: M + j * c + c / 2, y: M + i * c + c / 2 + c * 0.1,
+                     "text-anchor": "middle", "font-size": Math.round(c * 0.34), "font-weight": 600,
+                     fill: CORES.tinta, opacity: 0.55 }, "–");
+      }
+    }
+  }
+  const rastro = el("g", {});
+  const peca = el("g", {});
+  el("circle", { r: c * 0.42, fill: "none", stroke: CORES.latao, "stroke-width": 2.5 }, undefined, peca);
+  const glifo = el("text", { class: "peca", y: c * 0.24, "text-anchor": "middle", "font-size": c * 0.72,
+                             "stroke-width": 2.2, "paint-order": "stroke", "stroke-linejoin": "round" }, "♞", peca);
+  pintarPeca = () => {
+    const cor = PECAS[A.cor] || PECAS.azul;
+    glifo.setAttribute("fill", cor.preenchimento);
+    glifo.setAttribute("stroke", cor.contorno);
+  };
+  pintarPeca();
+  const moverPeca = (x, y) => peca.setAttribute("transform", "translate(" + x + "," + y + ")");
+
+  // ------------------------------------------------------------------ prévia
+  if (A.modo === "previa") {
+    const s = A.inicio;
+    const destinos = SALTOS.map(([dl, dc]) => [s[0] + dl, s[1] + dc])
+      .filter(([l, cc]) => l >= 0 && l < n && cc >= 0 && cc < n);
+    destinos.forEach((d) => {
+      el("line", { x1: cx(s), y1: cy(s), x2: cx(d), y2: cy(d), stroke: CORES.tinta, "stroke-width": 1.5,
+                   "stroke-dasharray": "4 4", opacity: 0.6 }, undefined, rastro);
+      el("circle", { cx: cx(d), cy: cy(d), r: c * 0.13, fill: "#fff", stroke: CORES.tinta, "stroke-width": 1.5 }, undefined, rastro);
+    });
+    moverPeca(cx(s), cy(s));
+    const lateral = document.createElement("section");
+    lateral.className = "sumula";
+    lateral.innerHTML = '<header><h2>Casa inicial</h2><span class="placar">' + casaTxt(s) + "</span></header>" +
+      '<div class="nota">O cavalo começa em <strong>' + casaTxt(s) + "</strong>. Daqui ele tem <strong>" +
+      destinos.length + "</strong> saltos possíveis, marcados em linha tracejada.</div>";
+    raiz.appendChild(lateral);
+    ajustarAltura();
+    return;
+  }
+
+  // ------------------------------------------------------- animação e análise
+  const navegavel = A.modo === "analise";
+  const sumula = document.createElement("section");
+  sumula.className = "sumula" + (navegavel ? " navegavel" : "");
+  sumula.innerHTML = '<header><h2>Súmula</h2><span class="placar"></span></header><ol></ol>';
+  raiz.appendChild(sumula);
+  const placar = sumula.querySelector(".placar");
+  const lista = sumula.querySelector("ol");
+  P.forEach((p, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="num">' + (i + 1) + "</span><span>" + casaTxt(p) + "</span>";
+    if (navegavel) {
+      li.tabIndex = 0;
+      li.onclick = () => irPara(i + 1, true);
+      li.onkeydown = (e) => { if (e.key === "Enter") irPara(i + 1, true); };
+    }
+    lista.appendChild(li);
+  });
+
+  let k = navegavel ? total : 1;
+  // A súmula acompanha a altura do tabuleiro, que encolhe em telas estreitas.
+  const alinharSumula = () => {
+    if (window.innerWidth > 540) sumula.style.maxHeight = svg.getBoundingClientRect().height + "px";
+  };
+  alinharSumula();
+  window.addEventListener("resize", alinharSumula);
+
+  function desenharRastro() {
+    rastro.replaceChildren();
+    const vis = P.slice(0, k);
+    if (vis.length > 1) {
+      el("polyline", { points: vis.slice(0, -1).map((p) => cx(p) + "," + cy(p)).join(" "), fill: "none",
+                       stroke: CORES.tinta, "stroke-width": 2, "stroke-linejoin": "round", opacity: 0.45 }, undefined, rastro);
+      const a = vis[vis.length - 2], b = vis[vis.length - 1];
+      el("line", { x1: cx(a), y1: cy(a), x2: cx(b), y2: cy(b), stroke: CORES.latao, "stroke-width": 3,
+                   "stroke-linecap": "round" }, undefined, rastro);
+    }
+    const fonte = Math.round(c * 0.27);
+    vis.forEach((p, i) => {
+      if (i === k - 1) return;
+      const inicio = i === 0;
+      el("circle", { cx: cx(p), cy: cy(p), r: c * 0.27, fill: inicio ? CORES.tinta : "#fff",
+                     stroke: CORES.tinta, "stroke-width": 1.5 }, undefined, rastro);
+      el("text", { x: cx(p), y: cy(p) + fonte * 0.36, "text-anchor": "middle", "font-size": fonte,
+                   "font-weight": 600, fill: inicio ? "#fff" : CORES.tinta }, i + 1, rastro);
+    });
+    placar.textContent = "lance " + k + " de " + total;
+    [...lista.children].forEach((li, i) => { li.className = i === k - 1 ? "atual" : i >= k ? "futuro" : ""; });
+    const atual = lista.children[k - 1];
+    if (atual) atual.scrollIntoView({ block: "nearest" });
+  }
+
+  function deslizar(de, para, duracao, aoTerminar) {
+    if (reduzirMovimento || duracao <= 0) { moverPeca(cx(para), cy(para)); aoTerminar(); return; }
+    const t0 = performance.now();
+    const passo = (agora) => {
+      const t = Math.min(1, (agora - t0) / duracao);
+      const s = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      moverPeca(cx(de) + (cx(para) - cx(de)) * s, cy(de) + (cy(para) - cy(de)) * s);
+      if (t < 1) animacao = requestAnimationFrame(passo); else aoTerminar();
+    };
+    animacao = requestAnimationFrame(passo);
+  }
+
+  if (!navegavel) {
+    // Reprodução automática do melhor percurso: ~6 s no total, entre 70 e 220 ms por salto.
+    const estado = document.createElement("div");
+    estado.className = "estado";
+    estado.innerHTML = "<p><span>Reproduzindo o melhor percurso encontrado pela estratégia</span>" +
+      '<strong id="contagem"></strong></p><div class="barra"><i></i></div>';
+    coluna.appendChild(estado);
+    const contagem = estado.querySelector("#contagem");
+    const barra = estado.querySelector(".barra i");
+    const duracao = Math.max(70, Math.min(220, 6000 / Math.max(total - 1, 1)));
+    const atualizar = () => {
+      desenharRastro();
+      contagem.textContent = k + " de " + total;
+      barra.style.width = (100 * k / Math.max(total, 1)) + "%";
+    };
+    moverPeca(cx(P[0]), cy(P[0]));
+    atualizar();
+    const execucao = A.execucao;
+    const proximo = () => {
+      if (k >= total) {
+        setTimeout(() => devolver({ evento: "fim", execucao: execucao }), 700);
+        return;
+      }
+      deslizar(P[k - 1], P[k], duracao, () => { k += 1; atualizar(); proximo(); });
+    };
+    setTimeout(proximo, 400);
+    ajustarAltura();
+    return;
+  }
+
+  // Navegação manual (tela de resultados).
+  const controles = document.createElement("div");
+  controles.className = "controles";
+  controles.innerHTML =
+    '<button data-acao="ini" aria-label="Primeira casa" title="Primeira casa">⏮</button>' +
+    '<button data-acao="ant" aria-label="Casa anterior" title="Casa anterior (seta esquerda)">◀</button>' +
+    '<button data-acao="tocar" class="tocar">▶ Reproduzir</button>' +
+    '<button data-acao="prox" aria-label="Próxima casa" title="Próxima casa (seta direita)">▶</button>' +
+    '<button data-acao="fim" aria-label="Última casa" title="Última casa">⏭</button>' +
+    '<input type="range" min="1" step="1" aria-label="Casa exibida">';
+  coluna.appendChild(controles);
+  const faixa = controles.querySelector("input");
+  const botaoTocar = controles.querySelector(".tocar");
+  faixa.max = Math.max(total, 1);
+  let tocando = false;
+
+  function mostrar() { moverPeca(cx(P[k - 1]), cy(P[k - 1])); desenharRastro(); faixa.value = k; }
+  function parar() { tocando = false; if (animacao) cancelAnimationFrame(animacao); botaoTocar.textContent = "▶ Reproduzir"; }
+  function irPara(novo, interromper) {
+    if (interromper) parar();
+    novo = Math.max(1, Math.min(total, novo));
+    if (Math.abs(novo - k) === 1) {
+      const de = P[k - 1];
+      k = novo;
+      desenharRastro();
+      faixa.value = k;
+      deslizar(de, P[k - 1], 140, () => {});
+    } else { k = novo; mostrar(); }
+  }
+  function tocar() {
+    if (tocando) { parar(); return; }
+    tocando = true;
+    botaoTocar.textContent = "⏸ Pausar";
+    if (k >= total) { k = 1; mostrar(); }
+    const duracao = Math.max(70, Math.min(220, 6000 / Math.max(total - 1, 1)));
+    const proximo = () => {
+      if (!tocando) return;
+      if (k >= total) { parar(); return; }
+      const de = P[k - 1];
+      deslizar(de, P[k], duracao, () => { k += 1; desenharRastro(); faixa.value = k; proximo(); });
+    };
+    proximo();
+  }
+  controles.addEventListener("click", (e) => {
+    const acao = e.target.dataset && e.target.dataset.acao;
+    if (acao === "ini") irPara(1, true);
+    if (acao === "ant") irPara(k - 1, true);
+    if (acao === "prox") irPara(k + 1, true);
+    if (acao === "fim") irPara(total, true);
+    if (acao === "tocar") tocar();
+  });
+  faixa.oninput = () => { parar(); k = Number(faixa.value); mostrar(); };
+  document.onkeydown = (e) => {
+    if (e.key === "ArrowLeft") irPara(k - 1, true);
+    if (e.key === "ArrowRight") irPara(k + 1, true);
+  };
+  mostrar();
+  ajustarAltura();
+}
+</script>
+</body>
+</html>
