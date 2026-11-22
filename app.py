@@ -458,6 +458,65 @@ def carregar_experimentos(caminho: Path = CAMINHO_EXPERIMENTOS) -> pd.DataFrame 
     return pd.read_csv(caminho)
 
 
+COLUNAS_TABELA_EXPERIMENTOS = (
+    "cenario", "tabuleiro", "posicao_inicial", "modo", "variante", "casas_visitadas",
+    "total_casas", "cobertura_percentual", "passeio_completo", "motivo_parada",
+    "estados_explorados", "verificacoes_movimentos", "avaliacoes_candidatos", "recuos",
+    "tempo_segundos", "validador_aprovado",
+)
+CONFIG_COLUNAS_EXPERIMENTOS = {
+    "cenario": "Cenário",
+    "tabuleiro": "Tabuleiro",
+    "posicao_inicial": "Início",
+    "modo": "Modo",
+    "variante": "Variante",
+    "casas_visitadas": "Casas",
+    "total_casas": "Total",
+    "cobertura_percentual": st.column_config.NumberColumn("Cobertura %", format="%.2f"),
+    "passeio_completo": "Completo?",
+    "motivo_parada": "Motivo",
+    "estados_explorados": "Estados",
+    "verificacoes_movimentos": "Verificações",
+    "avaliacoes_candidatos": "Avaliações",
+    "recuos": "Recuos",
+    "tempo_segundos": st.column_config.NumberColumn("Tempo (s)", format="%.6f"),
+    "validador_aprovado": "Validador",
+}
+
+
+def rotular_cenarios(df: pd.DataFrame) -> pd.DataFrame:
+    """Copia ``df`` com a coluna ``rotulo_cenario`` (ex.: ``"T01\\n5x5 (1, 1)"``) para os gráficos."""
+    df = df.copy()
+    if {"cenario", "tabuleiro", "posicao_inicial"} <= set(df.columns):
+        df["rotulo_cenario"] = (df["cenario"].astype(str) + "\n" + df["tabuleiro"].astype(str)
+                                + " " + df["posicao_inicial"].astype(str))
+    elif "cenario" in df.columns:
+        df["rotulo_cenario"] = df["cenario"].astype(str)
+    else:
+        df["rotulo_cenario"] = ""
+    return df
+
+
+def gerar_html_resumo_experimentos(df: pd.DataFrame) -> str:
+    """Resumo lido do CSV: execuções, aprovação no validador, versão do código e cenários."""
+    itens = [f"<dt>Execuções</dt><dd>{len(df)}</dd>"]
+    if "validador_aprovado" in df.columns:
+        aprovadas = int(df["validador_aprovado"].astype(str).str.lower().eq("true").sum())
+        itens.append(f"<dt>Validador</dt><dd>{aprovadas} de {len(df)} aprovadas</dd>")
+    if "versao_codigo" in df.columns:
+        versoes = ", ".join(escape(str(v)) for v in dict.fromkeys(df["versao_codigo"]))
+        itens.append(f"<dt>Código</dt><dd><code>{versoes}</code></dd>")
+    if {"cenario", "tabuleiro", "posicao_inicial"} <= set(df.columns):
+        cenarios = df.drop_duplicates("cenario")
+        linhas = []
+        for _, c in cenarios.iterrows():
+            objetivo = f": {escape(str(c['objetivo']))}" if "objetivo" in df.columns else ""
+            linhas.append(f"<strong>{escape(str(c['cenario']))}</strong> {escape(str(c['tabuleiro']))}, "
+                          f"início {escape(str(c['posicao_inicial']))}{objetivo}")
+        itens.append(f"<dt>Cenários</dt><dd>{'<br>'.join(linhas)}</dd>")
+    return f'<dl class="execucao resumo-exp">{"".join(itens)}</dl>'
+
+
 # --------------------------------------------------------------------------- estilo
 
 CSS_GLOBAL = """
@@ -495,6 +554,7 @@ CSS_GLOBAL = """
 .execucao { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 4px; font-size: .85rem; }
 .execucao dt { color: #6b7393; }
 .execucao dd { margin: 0; color: #1C2559; }
+.resumo-exp { margin: 0 0 1rem; line-height: 1.5; }
 .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin: 8px 0 18px; }
 .cartao { margin: 0; background: #fff; border: 1px solid #D5DAE5; border-radius: 8px; padding: 12px; }
 .cartao figcaption { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: .88rem; margin-bottom: 10px; }
@@ -933,15 +993,22 @@ def _tela_experimentos() -> None:
                 "`python experiments/run_experiments.py --saida results/experiments.csv`.")
         return
 
+    st.markdown(gerar_html_resumo_experimentos(df), unsafe_allow_html=True)
+    df = rotular_cenarios(df)
     colunas_graficos = {"cenario", "modo", "variante"} | {c for c, _, _ in METRICAS_GRAFICO}
     if colunas_graficos <= set(df.columns):
-        st.pyplot(grafico_comparativo(df, grupo="cenario"), width="stretch")
+        st.pyplot(grafico_comparativo(df, grupo="rotulo_cenario"), width="stretch")
     else:
         faltando = sorted(colunas_graficos - set(df.columns))
         st.caption(f"Gráficos indisponíveis: faltam as colunas {', '.join(faltando)}.")
-    st.dataframe(df, width="stretch", hide_index=True)
-    st.download_button("Baixar CSV", df.to_csv(index=False).encode("utf-8"),
-                       file_name="experiments.csv", mime="text/csv")
+
+    principais = [c for c in COLUNAS_TABELA_EXPERIMENTOS if c in df.columns]
+    st.dataframe(df[principais] if principais else df.drop(columns="rotulo_cenario"),
+                 width="stretch", hide_index=True, column_config=CONFIG_COLUNAS_EXPERIMENTOS)
+    with st.expander("Todas as colunas do CSV"):
+        st.dataframe(df.drop(columns="rotulo_cenario"), width="stretch", hide_index=True)
+    st.download_button("Baixar CSV", df.drop(columns="rotulo_cenario").to_csv(index=False)
+                       .encode("utf-8"), file_name="experiments.csv", mime="text/csv")
 
 
 TELAS_FUNCOES = {

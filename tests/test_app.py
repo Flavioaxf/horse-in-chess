@@ -231,6 +231,48 @@ def test_grafico_tem_uma_barra_por_combinacao_e_grupo() -> None:
     plt.close(fig)
 
 
+def _csv_ficticio_completo() -> pd.DataFrame:
+    df = _csv_ficticio()
+    df["tabuleiro"] = df["cenario"].map({"T01": "5x5", "T02": "8x8"})
+    df["posicao_inicial"] = "(1, 1)"
+    df["objetivo"] = "Canto"
+    df["validador_aprovado"] = [True] * (len(df) - 1) + [False]
+    df["versao_codigo"] = "abc1234"
+    return df
+
+
+def test_rotulo_de_cenario_junta_tabuleiro_e_inicio() -> None:
+    df = app.rotular_cenarios(_csv_ficticio_completo())
+    assert df["rotulo_cenario"].iloc[0] == "T01\n5x5 (1, 1)"
+    assert set(df["rotulo_cenario"]) == {"T01\n5x5 (1, 1)", "T02\n8x8 (1, 1)"}
+
+
+def test_rotulo_de_cenario_sem_colunas_extras_usa_o_codigo() -> None:
+    df = app.rotular_cenarios(_csv_ficticio())
+    assert set(df["rotulo_cenario"]) == {"T01", "T02"}
+
+
+def test_resumo_dos_experimentos_le_o_csv() -> None:
+    html = app.gerar_html_resumo_experimentos(_csv_ficticio_completo())
+    assert "<dd>8</dd>" in html
+    assert "7 de 8 aprovadas" in html
+    assert "abc1234" in html
+    assert "<strong>T02</strong> 8x8, início (1, 1): Canto" in html
+
+
+def test_resumo_tolera_csv_sem_colunas_opcionais() -> None:
+    html = app.gerar_html_resumo_experimentos(_csv_ficticio())
+    assert "<dd>8</dd>" in html and "Validador" not in html
+
+
+def test_grafico_aceita_rotulo_de_cenario() -> None:
+    fig = app.grafico_comparativo(app.rotular_cenarios(_csv_ficticio_completo()),
+                                  grupo="rotulo_cenario")
+    assert [t.get_text() for t in fig.axes[0].get_xticklabels()] == [
+        "T01\n5x5 (1, 1)", "T02\n8x8 (1, 1)"]
+    plt.close(fig)
+
+
 def test_experimentos_ausentes_retornam_none(tmp_path: Path) -> None:
     assert app.carregar_experimentos(tmp_path / "nao_existe.csv") is None
 
