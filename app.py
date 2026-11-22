@@ -360,8 +360,8 @@ def gerar_html_eficiencia(resultado: ResultadoExecucao) -> str:
     if resultado.estados_sem_completo_possivel > 0:
         nota = (
             f'<p class="nota">{formatar_inteiro(resultado.estados_sem_completo_possivel)} '
-            "estados foram expandidos quando a condição necessária da Proposição 5.3 "
-            "(F = 1, I = 0, P ≤ 1) já indicava que o passeio completo não era mais possível. "
+            "estados foram expandidos sem satisfazer a condição necessária da Proposição 5.3 "
+            "(F = 1, I = 0, P ≤ 1), ou seja, já sem chance de passeio completo a partir deles. "
             "O indicador é só informativo: nenhum candidato foi descartado por ele.</p>"
         )
     return (f'<section class="ficha"><h3>Eficiência</h3><div class="livro">{celulas}</div>'
@@ -423,7 +423,7 @@ def grafico_comparativo(df: pd.DataFrame, grupo: str | None = None) -> plt.Figur
             ``None`` para um único grupo.
     """
     grupos = [None] if grupo is None else list(dict.fromkeys(df[grupo]))
-    combinacoes = [(m, v) for v in VARIANTES for m in MODOS]
+    combinacoes = [(m, v) for m in MODOS for v in VARIANTES]  # mesma ordem dos cartões e tabelas
     largura = 0.8 / len(combinacoes)
 
     fig, eixos = plt.subplots(1, len(METRICAS_GRAFICO), figsize=(13, 3.3))
@@ -531,7 +531,7 @@ def gerar_html_resumo_experimentos(df: pd.DataFrame) -> str:
 
 CSS_GLOBAL = """
 <style>
-.block-container { padding-top: 2.2rem; max-width: 1240px; }
+.block-container { padding-top: 3.6rem; max-width: 1240px; }
 .painel { display: flex; flex-direction: column; gap: 14px; }
 .ficha { background: #fff; border: 1px solid #D5DAE5; border-radius: 8px; padding: 16px 18px; }
 .ficha h3 {

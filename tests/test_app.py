@@ -251,6 +251,13 @@ def test_grafico_tem_uma_barra_por_combinacao_e_grupo() -> None:
     plt.close(fig)
 
 
+def test_legenda_do_grafico_segue_a_ordem_dos_cartoes() -> None:
+    fig = app.grafico_comparativo(_csv_ficticio())
+    _, rotulos = fig.axes[0].get_legend_handles_labels()
+    assert rotulos == [app.rotulo_combinacao(m, v) for m in app.MODOS for v in app.VARIANTES]
+    plt.close(fig)
+
+
 def _csv_ficticio_completo() -> pd.DataFrame:
     df = _csv_ficticio()
     df["tabuleiro"] = df["cenario"].map({"T01": "5x5", "T02": "8x8"})
